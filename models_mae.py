@@ -122,30 +122,49 @@ class MaskedAutoencoderViT(nn.Module):
 
     def random_masking(self, x, mask_ratio):
         """
-        Perform per-sample random masking by per-sample shuffling.
-        Per-sample shuffling is done by argsort random noise.
-        x: [N, L, D], sequence
+        Aplica mascaramento estruturado conforme o artigo VisionTS:
+        mantém as 'n' colunas da esquerda de cada linha de patch visíveis.
+    
+        Args:
+            x (Tensor): Entrada com shape [B, N_patches, D] (e.g., [batch, 196, 768])
+            L (int): Tamanho do contexto (e.g., 300)
+            H (int): Horizonte de predição (e.g., 100)
+            c (float): Constante da fórmula de visibilidade (usada no paper = 0.4)
+    
+        Returns:
+            x_masked (Tensor): Tensor com apenas os patches visíveis, shape [B, len_keep, D]
+            mask (Tensor): Máscara binária (0 = visível, 1 = mascarado), shape [B, N_patches]
+            ids_keep (Tensor): Índices dos patches visíveis [B, len_keep]
         """
-        N, L, D = x.shape  # batch, length, dim
-        len_keep = int(L * (1 - mask_ratio))
-        
-        noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
-        
-        # sort noise for each sample
-        ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
-
-        # keep the first subset
-        ids_keep = ids_shuffle[:, :len_keep]
-        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
-
-        # generate the binary mask: 0 is keep, 1 is remove
-        mask = torch.ones([N, L], device=x.device)
-        mask[:, :len_keep] = 0
-        # unshuffle to get the binary mask
-        mask = torch.gather(mask, dim=1, index=ids_restore)
-
-        return x_masked, mask, ids_restore
+        B, num_patches, D = x.shape
+    
+        # Recupera altura e largura do grid de patches (e.g., 14x14 = 196)
+        H_patch, W_patch = self.patch_embed.grid_size
+        assert H_patch * W_patch == num_patches, "Grid inconsistente com o número de patches."
+    
+        # Número de colunas visíveis com base na equação do artigo
+        n = int(c * W_patch * L / (L + H))  # colunas visíveis por linha
+        len_keep = H_patch * n  # total de patches visíveis
+    
+        # Gera os índices dos patches visíveis
+        ids_keep = []
+        for _ in range(B):
+            ids = []
+            for row in range(H_patch):
+                for col in range(n):
+                    idx = row * W_patch + col  # patch index por linha
+                    ids.append(idx)
+            ids_keep.append(torch.tensor(ids, device=x.device))
+        ids_keep = torch.stack(ids_keep)  # shape (B, len_keep)
+    
+        # Extrai apenas os patches visíveis
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))  # shape [B, len_keep, D]
+    
+        # Cria máscara binária (0 = visível, 1 = mascarado)
+        mask = torch.ones(B, num_patches, device=x.device)
+        mask.scatter_(1, ids_keep, 0)
+    
+        return x_masked, mask, ids_keep
 
     def forward_encoder(self, x, mask_ratio):
         # embed patches
