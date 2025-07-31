@@ -139,7 +139,8 @@ class MaskedAutoencoderViT(nn.Module):
         B, num_patches, D = x.shape
     
         # Recupera altura e largura do grid de patches (e.g., 14x14 = 196)
-        grid_size = int(model.patch_embed.num_patches ** 0.5)
+        grid_size = int(self.patch_embed.num_patches ** 0.5)
+
         H_patch, W_patch = grid_size, grid_size
 
 
